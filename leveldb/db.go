@@ -74,7 +74,7 @@ type DB struct {
 
 	// Compaction.
 	compCommitLk     sync.Mutex
-	tcompCmdC        chan cCmd
+	tcompCmdC        chan cCmd // 触发table压缩，tCompaction函数里会去监听这个channel，然后去执行table压缩
 	tcompPauseC      chan chan<- struct{}
 	mcompCmdC        chan cCmd
 	compErrC         chan error
@@ -154,7 +154,7 @@ func openDB(s *session) (*DB, error) {
 		}
 	} else {
 		db.closeW.Add(2)
-		go db.tCompaction()
+		go db.tCompaction() // 压缩goroutine
 		go db.mCompaction()
 		// go db.jWriter()
 	}
@@ -931,6 +931,7 @@ func (db *DB) GetSnapshot() (*Snapshot, error) {
 // GetProperty returns value of the given property name.
 //
 // Property names:
+//
 //	leveldb.num-files-at-level{n}
 //		Returns the number of files at level 'n'.
 //	leveldb.stats

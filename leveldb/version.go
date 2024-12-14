@@ -291,6 +291,7 @@ func (v *version) fillRecord(r *sessionRecord) {
 	}
 }
 
+// 返回某个Level中已经排序好的表/文件个数
 func (v *version) tLen(level int) int {
 	if level < len(v.levels) {
 		return len(v.levels[level])

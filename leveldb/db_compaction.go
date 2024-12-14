@@ -720,12 +720,18 @@ func (db *DB) compTrigger(compC chan<- cCmd) {
 }
 
 // This will trigger auto compaction and/or wait for all compaction to be done.
+// 这个函数是个通用的收发阻塞的函数，用于触发任务并获取执行结果，
+// 可以认为是goroutine之间的通信吧
+// 会往compC尝试发送数据 cCmd，
+// 然后阻塞监听「监听compC这个channel的其他goroutine」往 cCmd.ack()函数写的啥数据
+// 1.compC<- cCmd
+// 2.other goroutine listen compC, receive cCmd, call cCmd.ack()
 func (db *DB) compTriggerWait(compC chan<- cCmd) (err error) {
 	ch := make(chan error)
 	defer close(ch)
 	// Send cmd.
 	select {
-	case compC <- cAuto{ch}:
+	case compC <- cAuto{ch}: // 往通道里写，触发压缩
 	case err = <-db.compErrC:
 		return
 	case <-db.closeC:
@@ -869,6 +875,6 @@ func (db *DB) tCompaction() {
 			}
 			x = nil
 		}
-		db.tableAutoCompaction()
+		db.tableAutoCompaction() // 真正的压缩实现
 	}
 }

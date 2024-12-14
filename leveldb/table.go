@@ -21,6 +21,8 @@ import (
 )
 
 // tFile holds basic information about a table.
+// 每个 tFile 代表一个已排序的表
+// 表中的kv是key有序的
 type tFile struct {
 	fd         storage.FileDesc
 	seekLeft   int32

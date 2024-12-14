@@ -78,16 +78,16 @@ func (p *passthroughCacher) New(capacity int) cache.Cacher {
 //
 // Shared cache example:
 //
-//     fileCache := opt.NewLRU(500)
-//     blockCache := opt.NewLRU(8 * opt.MiB)
-// 	   options := &opt.Options{
-//         OpenFilesCacher: fileCache,
-//         BlockCacher: blockCache,
-//     }
-//     db1, err1 := leveldb.OpenFile("path/to/db1", options)
-//     ...
-//     db2, err2 := leveldb.OpenFile("path/to/db2", options)
-//     ...
+//	    fileCache := opt.NewLRU(500)
+//	    blockCache := opt.NewLRU(8 * opt.MiB)
+//		   options := &opt.Options{
+//	        OpenFilesCacher: fileCache,
+//	        BlockCacher: blockCache,
+//	    }
+//	    db1, err1 := leveldb.OpenFile("path/to/db1", options)
+//	    ...
+//	    db2, err2 := leveldb.OpenFile("path/to/db2", options)
+//	    ...
 func PassthroughCacher(x cache.Cacher) Cacher {
 	return &passthroughCacher{x}
 }
@@ -402,12 +402,21 @@ type Options struct {
 	// pause write.
 	//
 	// The default value is 12.
+	//
+	// 当 Level-0 中的“已排序表”数量达到 WriteL0PauseTrigger 的值时，写入操作将被暂停。
+	// 这是为了防止 Level-0 过度拥挤，导致写入性能下降。
+	// 触发条件：如果 Level-0 中的已排序表数量超过此阈值，
+	// LevelDB 将暂停写入操作，直到压缩操作完成并释放出足够的空间。
 	WriteL0PauseTrigger int
 
 	// WriteL0SlowdownTrigger defines number of 'sorted table' at level-0 that
 	// will trigger write slowdown.
 	//
 	// The default value is 8.
+	//
+	// 当 Level-0 中的“已排序表”数量达到 WriteL0SlowdownTrigger 的值时，
+	// 写入操作将被减缓，而不是完全暂停。
+	// 触发条件：如果 Level-0 中的已排序表数量超过此阈值，LevelDB 将开始减缓写入速度
 	WriteL0SlowdownTrigger int
 
 	// FilterBaseLg is the log size for filter block to create a bloom filter.
@@ -626,6 +635,9 @@ func (o *Options) GetNoSync() bool {
 	return o.NoSync
 }
 
+// GetNoWriteMerge 多个写请求到来的时候，是否合并成一个写请求
+// true: 不合并
+// false：尝试合并写请求
 func (o *Options) GetNoWriteMerge() bool {
 	if o == nil {
 		return false
@@ -670,6 +682,12 @@ func (o *Options) GetWriteBuffer() int {
 	return o.WriteBuffer
 }
 
+// GetWriteL0PauseTrigger
+// 整个DB实例级别的设置
+// 当 Level-0 中的“已排序表”数量达到 WriteL0PauseTrigger 的值时，写入操作将被暂停。
+// 这是为了防止 Level-0 过度拥挤，导致写入性能下降。
+// 触发条件：如果 Level-0 中的已排序表数量超过此阈值，
+// LevelDB 将暂停写入操作，直到压缩操作完成并释放出足够的空间。
 func (o *Options) GetWriteL0PauseTrigger() int {
 	if o == nil || o.WriteL0PauseTrigger == 0 {
 		return DefaultWriteL0PauseTrigger
@@ -677,6 +695,11 @@ func (o *Options) GetWriteL0PauseTrigger() int {
 	return o.WriteL0PauseTrigger
 }
 
+// GetWriteL0SlowdownTrigger
+// 整个DB实例级别的设置
+// 当 Level-0 中的“已排序表”数量达到 WriteL0SlowdownTrigger 的值时，
+// 写入操作将被减缓，而不是完全暂停。
+// 触发条件：如果 Level-0 中的已排序表数量超过此阈值，LevelDB 将开始减缓写入速度
 func (o *Options) GetWriteL0SlowdownTrigger() int {
 	if o == nil || o.WriteL0SlowdownTrigger == 0 {
 		return DefaultWriteL0SlowdownTrigger
@@ -743,6 +766,9 @@ type WriteOptions struct {
 	Sync bool
 }
 
+// GetNoWriteMerge 多个写请求到来的时候，是否合并成一个写请求
+// true: 不合并
+// false：尝试合并写请求
 func (wo *WriteOptions) GetNoWriteMerge() bool {
 	if wo == nil {
 		return false
@@ -750,6 +776,9 @@ func (wo *WriteOptions) GetNoWriteMerge() bool {
 	return wo.NoWriteMerge
 }
 
+// GetSync 写请求是否将Log同步到磁盘
+// 如果不设置的话,写入文件后，数据还会存在操作系统的缓冲区里，如果机器挂了，数据就会丢失
+// 如果设置为true,写入文件后，会调用 os.Sync函数，将数据同步到磁盘，这样即使机器挂了，Log数据也不会丢失,从Log里读就能恢复数据
 func (wo *WriteOptions) GetSync() bool {
 	if wo == nil {
 		return false

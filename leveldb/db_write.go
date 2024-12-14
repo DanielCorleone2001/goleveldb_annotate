@@ -32,11 +32,13 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 	return nil
 }
 
+// rotateMem
+// 管理当前DB memtable的转换
 func (db *DB) rotateMem(n int, wait bool) (mem *memDB, err error) {
 	retryLimit := 3
 retry:
 	// Wait for pending memdb compaction.
-	err = db.compTriggerWait(db.mcompCmdC)
+	err = db.compTriggerWait(db.mcompCmdC) // 触发immutable memtable 转换成 SSTable 文件并持久化
 	if err != nil {
 		return
 	}
@@ -63,6 +65,9 @@ retry:
 	return
 }
 
+// flush
+// 接收的参数n是即将写入的字节数，调用flush是为了确保内存可写，
+// 如果内存不足以支撑n字节的数据，就需要先把内存的数据写到磁盘，以便于即将到来的写入得以更新内存
 func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 	delayed := false
 	slowdownTrigger := db.s.o.GetWriteL0SlowdownTrigger()
@@ -74,24 +79,25 @@ func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 			return false
 		}
 		defer func() {
-			if retry {
-				mdb.decref()
-				mdb = nil
+			if retry { // 操作失败，需要重试
+				mdb.decref() // 引用计数减1
+				mdb = nil    // 重置，下次for循环周期会重新赋值的
 			}
 		}()
-		tLen := db.s.tLen(0)
-		mdbFree = mdb.Free()
+		tLen := db.s.tLen(0) // 获取第0层表的个数
+		mdbFree = mdb.Free() // 获取memdb的可用空间
 		switch {
-		case tLen >= slowdownTrigger && !delayed:
-			delayed = true
+		case tLen >= slowdownTrigger && !delayed: // level-0的文件较多，达到了写限流，sleep一下，触发下次循环
+			delayed = true // 这儿标记一下写入已经是delay状态，防止写入一直卡在这个条件里不断触发for循环
 			time.Sleep(time.Millisecond)
 		case mdbFree >= n:
+			// 内存可用空间大于等于即将写入的数据，可以直接退出for循环，让本次的写入后续去写memdb
 			return false
-		case tLen >= pauseTrigger:
+		case tLen >= pauseTrigger: // level-0的文件较多，达到了写暂停的条件啦，需要对table进行压缩
 			delayed = true
 			// Set the write paused flag explicitly.
 			atomic.StoreInt32(&db.inWritePaused, 1)
-			err = db.compTriggerWait(db.tcompCmdC)
+			err = db.compTriggerWait(db.tcompCmdC) // 主动触发对table的压缩，然后触发下次for循环
 			// Unset the write paused flag.
 			atomic.StoreInt32(&db.inWritePaused, 0)
 			if err != nil {
@@ -100,7 +106,7 @@ func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 		default:
 			// Allow memdb to grow if it has no entry.
 			if mdb.Len() == 0 {
-				mdbFree = n
+				mdbFree = n // 没数据，那就先设置成空闲个数为要写入的字节数？
 			} else {
 				mdb.decref()
 				mdb, err = db.rotateMem(n, false)
@@ -287,37 +293,42 @@ func (db *DB) Write(batch *Batch, wo *opt.WriteOptions) error {
 	sync := wo.GetSync() && !db.s.o.GetNoSync()
 
 	// Acquire write lock.
-	if merge {
+	if merge { // 需要尝试merge写请求
 		select {
-		case db.writeMergeC <- writeMerge{sync: sync, batch: batch}:
-			if <-db.writeMergedC {
+		case db.writeMergeC <- writeMerge{sync: sync, batch: batch}: // 尝试把这次请求的batch发送给正在写的写请求，看能够merge成功
+			if <-db.writeMergedC { // 阻塞等待，读取到了merge成功的信号，说明这次写请求成功上车啦，等前面的大哥帮忙写就行了
 				// Write is merged.
-				return <-db.writeAckC
+				return <-db.writeAckC // 看看帮忙merge的大哥是否写成功
 			}
+			// 走到这儿说明没有大哥帮我们把写请求带上车，那我们自己写吧！
+			// 接下来就是调用DB.writeLocked方法开始去写Log文件
 			// Write is not merged, the write lock is handed to us. Continue.
 		case db.writeLockC <- struct{}{}:
 			// Write lock acquired.
-		case err := <-db.compPerErrC:
+			// 走到这儿就是没有锁抢占，那也没人帮我们把写请求带上车，那我们自己写吧！
+			// 接下来就是调用DB.writeLocked方法开始去写Log文件
+		case err := <-db.compPerErrC: // 如果存在持久化Log的错误，那这次写请求就失败了
 			// Compaction error.
 			return err
-		case <-db.closeC:
+		case <-db.closeC: // DB关掉了，那就不写了
 			// Closed
 			return ErrClosed
 		}
-	} else {
+	} else { // 不需要merge写请求，开始申请写锁
 		select {
-		case db.writeLockC <- struct{}{}:
+		case db.writeLockC <- struct{}{}: // 堵塞等待写锁
 			// Write lock acquired.
-		case err := <-db.compPerErrC:
+			// 分到了写锁，调用DB.writeLocked方法开始去写Log文件
+		case err := <-db.compPerErrC: // 如果存在持久化Log的错误，那这次写请求就失败了
 			// Compaction error.
 			return err
-		case <-db.closeC:
+		case <-db.closeC: // DB关掉了，那就不写了
 			// Closed
 			return ErrClosed
 		}
 	}
 
-	return db.writeLocked(batch, nil, merge, sync)
+	return db.writeLocked(batch, nil, merge, sync) // TODO(qinguizhan): 这儿为啥ourBatch是空？
 }
 
 func (db *DB) putRec(kt keyType, key, value []byte, wo *opt.WriteOptions) error {

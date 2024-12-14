@@ -432,6 +432,7 @@ func (p *DB) Free() int {
 }
 
 // Len returns the number of entries in the DB.
+// memtable中的key value个数
 func (p *DB) Len() int {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

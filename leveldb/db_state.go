@@ -147,7 +147,7 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 	}
 	db.journalWriter = w
 	db.journalFd = fd
-	db.frozenMem = db.mem
+	db.frozenMem = db.mem // 将当前的memtable设置成immutable memtable
 	mem = db.mpoolGet(n)
 	mem.incref() // for self
 	mem.incref() // for caller
@@ -186,6 +186,7 @@ func (db *DB) getEffectiveMem() *memDB {
 }
 
 // Get frozen memdb.
+// 获取immutable memtable
 func (db *DB) getFrozenMem() *memDB {
 	db.memMu.RLock()
 	defer db.memMu.RUnlock()
