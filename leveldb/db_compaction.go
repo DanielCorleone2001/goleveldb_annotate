@@ -266,6 +266,9 @@ func (db *DB) compactionCommit(name string, rec *sessionRecord) {
 	}, nil)
 }
 
+// memCompaction
+// 将immutable memtable的数据转换成SSTable
+// 并持久化到磁盘
 func (db *DB) memCompaction() {
 	mdb := db.getFrozenMem()
 	if mdb == nil {
@@ -286,6 +289,8 @@ func (db *DB) memCompaction() {
 	// Pause table compaction.
 	resumeC := make(chan struct{})
 	select {
+	// 通知table compaction暂停SSTable的压缩
+	// memtable的压缩和SSTable的压缩需要是互斥
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
 	case <-db.compPerErrC:
 		close(resumeC)
@@ -339,7 +344,7 @@ func (db *DB) memCompaction() {
 	// Resume table compaction.
 	if resumeC != nil {
 		select {
-		case <-resumeC:
+		case <-resumeC: // 通知table compaction可以不需要暂停压缩了
 			close(resumeC)
 		case <-db.closeC:
 			db.compactionExitTransact()
@@ -737,6 +742,7 @@ func (db *DB) compTriggerWait(compC chan<- cCmd) (err error) {
 	case <-db.closeC:
 		return ErrClosed
 	}
+	// 阻塞等待执行结果
 	// Wait cmd.
 	select {
 	case err = <-ch:

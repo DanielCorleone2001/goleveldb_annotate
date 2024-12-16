@@ -28,6 +28,9 @@ func (s *session) pickMemdbLevel(umin, umax []byte, maxLevel int) int {
 	return v.pickMemdbLevel(umin, umax, maxLevel)
 }
 
+// 1. 创建新的 SSTable 文件
+// 2. 将 memtable 中的数据写入 SSTable
+// 3. 返回这个 SSTable 应该放在哪一层
 func (s *session) flushMemdb(rec *sessionRecord, mdb *memdb.DB, maxLevel int) (int, error) {
 	// Create sorted table.
 	iter := mdb.NewIterator(nil)

@@ -179,6 +179,7 @@ const (
 )
 
 // DB is an in-memory key/value database.
+// 这个玩意就是memTable，跳表实现
 type DB struct {
 	cmp comparer.BasicComparer
 	rnd *rand.Rand
@@ -208,26 +209,29 @@ func (p *DB) randHeight() (h int) {
 }
 
 // Must hold RW-lock if prev == true, as it use shared prevNode slice.
+// key: 要查找的键
+// prev: 是否需要记录搜索路径（用于插入操作）
+// 返回值：(找到的节点索引, 是否精确匹配)
 func (p *DB) findGE(key []byte, prev bool) (int, bool) {
 	node := 0
 	h := p.maxHeight - 1
 	for {
-		next := p.nodeData[node+nNext+h]
-		cmp := 1
+		next := p.nodeData[node+nNext+h] // 获取当前层的下一个节点
+		cmp := 1                         // 比较 next 节点的 key 和目标 key
 		if next != 0 {
 			o := p.nodeData[next]
 			cmp = p.cmp.Compare(p.kvData[o:o+p.nodeData[next+nKey]], key)
 		}
 		if cmp < 0 {
 			// Keep searching in this list
-			node = next
+			node = next // next 的 key 小于目标 key，继续在当前层向右搜索
 		} else {
 			if prev {
-				p.prevNode[h] = node
+				p.prevNode[h] = node // 记录搜索路径（用于插入操作）
 			} else if cmp == 0 {
-				return next, true
+				return next, true // 找到精确匹配
 			}
-			if h == 0 {
+			if h == 0 { // 到达最底层了
 				return next, cmp == 0
 			}
 			h--
@@ -274,12 +278,13 @@ func (p *DB) findLast() int {
 // for that key; a DB is not a multi-map.
 //
 // It is safe to modify the contents of the arguments after Put returns.
+// skiplist的写操作，覆盖更新内存中的数据
 func (p *DB) Put(key []byte, value []byte) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if node, exact := p.findGE(key, true); exact {
-		kvOffset := len(p.kvData)
+	if node, exact := p.findGE(key, true); exact { // 首先查找是否已存在相同的 key
+		kvOffset := len(p.kvData) // 如果找到相同的 key，直接更新值
 		p.kvData = append(p.kvData, key...)
 		p.kvData = append(p.kvData, value...)
 		p.nodeData[node] = kvOffset
@@ -289,7 +294,7 @@ func (p *DB) Put(key []byte, value []byte) error {
 		return nil
 	}
 
-	h := p.randHeight()
+	h := p.randHeight() // 2. 如果是新 key，随机生成节点高度
 	if h > p.maxHeight {
 		for i := p.maxHeight; i < h; i++ {
 			p.prevNode[i] = 0
@@ -303,7 +308,7 @@ func (p *DB) Put(key []byte, value []byte) error {
 	// Node
 	node := len(p.nodeData)
 	p.nodeData = append(p.nodeData, kvOffset, len(key), len(value), h)
-	for i, n := range p.prevNode[:h] {
+	for i, n := range p.prevNode[:h] { // 更新每层的指针
 		m := n + nNext + i
 		p.nodeData = append(p.nodeData, p.nodeData[m])
 		p.nodeData[m] = node

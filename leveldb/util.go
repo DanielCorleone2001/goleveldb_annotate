@@ -85,7 +85,7 @@ func sortFds(fds []storage.FileDesc) {
 
 func ensureBuffer(b []byte, n int) []byte {
 	if cap(b) < n {
-		return make([]byte, n)
+		return make([]byte, n) //不够就扩容到n字节吧
 	}
-	return b[:n]
+	return b[:n] //够了的话就截断，只取前n字节
 }

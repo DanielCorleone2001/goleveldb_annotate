@@ -31,7 +31,7 @@ func newErrBatchCorrupted(reason string) error {
 }
 
 const (
-	batchHeaderLen = 8 + 4
+	batchHeaderLen = 8 + 4 // 定长的header：seq(8字节) + batchLen(4字节)
 	batchGrowLimit = 3000
 )
 
@@ -41,16 +41,19 @@ type BatchReplay interface {
 	Delete(key []byte)
 }
 
+// batchIndex 是一次batch写操作中，单个kv在batch中的元信息
 type batchIndex struct {
-	keyType            keyType
-	keyPos, keyLen     int
-	valuePos, valueLen int
+	keyType            keyType //kv操作的类型
+	keyPos, keyLen     int     //kv key在batch data数组中的位置
+	valuePos, valueLen int     //kv value在batch data数组中的位置
 }
 
+// 从包含了很多个kv操作的数据中，获取单个kv实际的key
 func (index batchIndex) k(data []byte) []byte {
 	return data[index.keyPos : index.keyPos+index.keyLen]
 }
 
+// 从包含了很多个kv操作的数据中，获取单个kv实际的数据
 func (index batchIndex) v(data []byte) []byte {
 	if index.valueLen != 0 {
 		return data[index.valuePos : index.valuePos+index.valueLen]
@@ -60,10 +63,11 @@ func (index batchIndex) v(data []byte) []byte {
 
 // Batch is a write batch.
 type Batch struct {
-	data  []byte
-	index []batchIndex
+	data  []byte       // 本次batch对应的数据，顺序排列在一起，要切分去读的话，元信息在index里
+	index []batchIndex // 这次batch所涉及的key/value对的元信息
 
 	// internalLen is sums of key/value pair length plus 8-bytes internal key.
+	// 本次batch写操作需要占用的字节数
 	internalLen int
 
 	// growLimit is the threshold in order to slow down the memory allocation
@@ -75,12 +79,12 @@ type Batch struct {
 
 func (b *Batch) grow(n int) {
 	o := len(b.data)
-	if cap(b.data)-o < n {
+	if cap(b.data)-o < n { //剩余空间不足了
 		limit := batchGrowLimit
 		if b.growLimit > 0 {
 			limit = b.growLimit
 		}
-		div := 1
+		div := 1 //计算增长因子，既需要考虑本次扩容后能减少后续的扩容次数，也需要考虑不要占用太多内存
 		if len(b.index) > limit {
 			div = len(b.index) / limit
 		}
@@ -90,6 +94,7 @@ func (b *Batch) grow(n int) {
 	}
 }
 
+// 把kv操作加入到batch中
 func (b *Batch) appendRec(kt keyType, key, value []byte) {
 	n := 1 + binary.MaxVarintLen32 + len(key)
 	if kt == keyTypeVal {
@@ -160,6 +165,7 @@ func (b *Batch) Replay(r BatchReplay) error {
 }
 
 // Len returns number of records in the batch.
+// 本次batch写操作涉及的key/value对个数
 func (b *Batch) Len() int {
 	return len(b.index)
 }
@@ -217,6 +223,7 @@ func (b *Batch) decode(data []byte, expectedLen int) error {
 	return nil
 }
 
+// 在写log文件后，将batch写入到memdb中
 func (b *Batch) putMem(seq uint64, mdb *memdb.DB) error {
 	var ik []byte
 	for i, index := range b.index {
@@ -344,9 +351,9 @@ func decodeBatchToMem(data []byte, expectSeq uint64, mdb *memdb.DB) (seq uint64,
 }
 
 func encodeBatchHeader(dst []byte, seq uint64, batchLen int) []byte {
-	dst = ensureBuffer(dst, batchHeaderLen)
-	binary.LittleEndian.PutUint64(dst, seq)
-	binary.LittleEndian.PutUint32(dst[8:], uint32(batchLen))
+	dst = ensureBuffer(dst, batchHeaderLen)                  //确保一定能写12个字节
+	binary.LittleEndian.PutUint64(dst, seq)                  //先写seq,uint64是8个字节
+	binary.LittleEndian.PutUint32(dst[8:], uint32(batchLen)) //再写batchLen，也就是kv的个数，uint32是4个字节
 	return dst
 }
 
@@ -363,6 +370,7 @@ func decodeBatchHeader(data []byte) (seq uint64, batchLen int, err error) {
 	return
 }
 
+// 返回kv对的个数
 func batchesLen(batches []*Batch) int {
 	batchLen := 0
 	for _, batch := range batches {
@@ -371,11 +379,18 @@ func batchesLen(batches []*Batch) int {
 	return batchLen
 }
 
+// 格式：
+// [batch header: seq + total_count]
+// [batch1 data]
+// [batch2 data]
+// [batch3 data]
 func writeBatchesWithHeader(wr io.Writer, batches []*Batch, seq uint64) error {
+	// 写header
 	if _, err := wr.Write(encodeBatchHeader(nil, seq, batchesLen(batches))); err != nil {
 		return err
 	}
 	for _, batch := range batches {
+		// 注意，这儿其实就是在执行singleWriter的Write方法
 		if _, err := wr.Write(batch.data); err != nil {
 			return err
 		}

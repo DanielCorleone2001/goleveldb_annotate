@@ -294,6 +294,10 @@ func (db *DB) waitCompaction() error {
 // The transaction must be closed once done, either by committing or discarding
 // the transaction.
 // Closing the DB will discard open transaction.
+// 1.只会有全局单事务，因为要抢占写锁
+// 2.小的写入不要开事务，假设写入100KB的数据，那么就会直接产生100KB的SSTable文件；
+// 同时L0层会有很多小文件，文件很多的时候就会触发压缩了
+// 3.大数据量可以开事务，这样一次性生成大的SSTable，减少compaction的次数
 func (db *DB) OpenTransaction() (*Transaction, error) {
 	if err := db.ok(); err != nil {
 		return nil, err
@@ -301,7 +305,7 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 
 	// The write happen synchronously.
 	select {
-	case db.writeLockC <- struct{}{}:
+	case db.writeLockC <- struct{}{}: //阻塞等待抢占写锁
 	case err := <-db.compPerErrC:
 		return nil, err
 	case <-db.closeC:
@@ -313,6 +317,7 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 	}
 
 	// Flush current memdb.
+	// 一旦开始事务，如果memtable中存在数据的话，就一定会触发memtable的rotate！
 	if db.mem != nil && db.mem.Len() != 0 {
 		if _, err := db.rotateMem(0, true); err != nil {
 			return nil, err

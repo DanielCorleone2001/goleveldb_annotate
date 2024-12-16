@@ -25,6 +25,7 @@
 // Neither Readers or Writers are safe to use concurrently.
 //
 // Example code:
+//
 //	func read(r io.Reader) ([]string, error) {
 //		var ss []string
 //		journals := journal.NewReader(r, nil, true, true)
@@ -89,18 +90,19 @@ import (
 
 // These constants are part of the wire format and should not be changed.
 const (
-	fullChunkType   = 1
-	firstChunkType  = 2
-	middleChunkType = 3
-	lastChunkType   = 4
+	fullChunkType   = 1 // 单个kv能在一个block里面完整放下
+	firstChunkType  = 2 //单个kv在一个block里放不下，需要跨block，而这个block是第一个
+	middleChunkType = 3 //单个kv在一个block里放不下，需要跨block，而这个block不是最后一个
+	lastChunkType   = 4 //单个kv在一个block里放不下，需要跨block，而这个block是最后一个
 )
 
 const (
-	blockSize  = 32 * 1024
+	blockSize  = 32 * 1024 //一个日志块默认是32KB
 	headerSize = 7
 )
 
 type flusher interface {
+	//没看到有哪个玩意实现这个接口。。。
 	Flush() error
 }
 
@@ -341,15 +343,23 @@ func (x *singleReader) ReadByte() (byte, error) {
 }
 
 // Writer writes journals to an underlying io.Writer.
+// buf [32KB]:
+// [已写数据...][当前记录的header][当前记录的数据...][未使用空间...]
+// *********************************************^               ^
+// *********************************************i               j
 type Writer struct {
 	// w is the underlying writer.
 	w io.Writer
 	// seq is the sequence number of the current journal.
-	seq int
+	seq int // 这个只是日志文件的序号，和DB的seqNumber不是一个东西哦
 	// f is w as a flusher.
 	f flusher
 	// buf[i:j] is the bytes that will become the current chunk.
 	// The low bound, i, includes the chunk header.
+	// buf[0,written]就是已经写磁盘的,
+	// buf[written:i]就是正在准备写磁盘的
+	//buf[i:j]：当前记录正在写入的区域
+	// j用于避免写溢出块的最大限制(32KB)
 	i, j int
 	// buf[:written] has already been written to w.
 	// written is zero unless Flush has been called.
@@ -363,7 +373,7 @@ type Writer struct {
 	// err is any accumulated error.
 	err error
 	// buf is the buffer.
-	buf [blockSize]byte
+	buf [blockSize]byte //正在写的块的数据
 }
 
 // NewWriter returns a new Writer.
@@ -376,6 +386,8 @@ func NewWriter(w io.Writer) *Writer {
 }
 
 // fillHeader fills in the header for the pending chunk.
+// 给block写header,需要补充对应的类型
+// header格式：[4字节 value crc checksum][2字节 value length][1字节 type]
 func (w *Writer) fillHeader(last bool) {
 	if w.i+headerSize > w.j || w.j > blockSize {
 		panic("leveldb/journal: bad writer state")
@@ -393,12 +405,25 @@ func (w *Writer) fillHeader(last bool) {
 			w.buf[w.i+6] = middleChunkType
 		}
 	}
+	//LevelDB 选择使用小端序（Little Endian）有几个重要考量：
+	// 1.硬件兼容性：
+	// - x86 和 ARM 等主流处理器都是小端序
+	// - 使用小端序可以避免在这些平台上的字节序转换开销
+	// 2.性能考虑：
+	// - 小端序在处理变长数字时更高效
+	// - 可以直接读取低位字节，不需要读完所有字节才能处理
+	// 3.历史原因：
+	// - LevelDB 源自 Google，最初设计时主要运行在 x86 平台
+	// - 保持与原始 C++ 版本 LevelDB 的兼容性
 	binary.LittleEndian.PutUint32(w.buf[w.i+0:w.i+4], util.NewCRC(w.buf[w.i+6:w.j]).Value())
 	binary.LittleEndian.PutUint16(w.buf[w.i+4:w.i+6], uint16(w.j-w.i-headerSize))
 }
 
 // writeBlock writes the buffered block to the underlying writer, and reserves
 // space for the next chunk's header.
+// 调用真正的文件存储去顺序写block,然后更新一下写标记索引就行了
+// 不需要reset buf数组，后边要用直接覆盖写就行。
+// 注意，这儿只是写到了操作系统的缓冲区，还没有真正的写入磁盘
 func (w *Writer) writeBlock() {
 	_, w.err = w.w.Write(w.buf[w.written:])
 	w.i = 0
@@ -413,11 +438,11 @@ func (w *Writer) writePending() {
 	if w.err != nil {
 		return
 	}
-	if w.pending {
+	if w.pending { /// 写完kv数据了，但有可能block没写完，需要帮忙填充header
 		w.fillHeader(true)
 		w.pending = false
 	}
-	_, w.err = w.w.Write(w.buf[w.written:w.j])
+	_, w.err = w.w.Write(w.buf[w.written:w.j]) // 把writer block buf缓冲区中剩余的也写到操作系统的缓冲区中
 	w.written = w.j
 }
 
@@ -434,6 +459,8 @@ func (w *Writer) Close() error {
 
 // Flush finishes the current journal, writes to the underlying writer, and
 // flushes it if that writer implements interface{ Flush() error }.
+// Flush会被block中的数据写入到操作系统缓冲区，具体见w.writePending()方法
+// 但是我没看到w.f.Flush()是干嘛的..
 func (w *Writer) Flush() error {
 	w.seq++
 	w.writePending()
@@ -469,6 +496,8 @@ func (w *Writer) Reset(writer io.Writer) (err error) {
 
 // Next returns a writer for the next journal. The writer returned becomes stale
 // after the next Close, Flush or Next call, and should no longer be used.
+// 调用时机：开始写一条新的kv
+// 这儿跟block的状态无关！block既有可能是新block，也有可能是写到一半的block
 func (w *Writer) Next() (io.Writer, error) {
 	w.seq++
 	if w.err != nil {
@@ -477,9 +506,13 @@ func (w *Writer) Next() (io.Writer, error) {
 	if w.pending {
 		w.fillHeader(true)
 	}
+	// 更新区间，先准备写header
 	w.i = w.j
 	w.j += headerSize
 	// Check if there is room in the block for the header.
+	//写header就已经要溢出了，那就剩余的block空间就不用了，
+	// 刷盘后开新的block去写吧
+	// 这么做是为了保证，header一定不会跨block，这样读取的时候corn case就少一些
 	if w.j > blockSize {
 		// Fill in the rest of the block with zeroes.
 		for k := w.i; k < blockSize; k++ {
@@ -490,8 +523,8 @@ func (w *Writer) Next() (io.Writer, error) {
 			return nil, w.err
 		}
 	}
-	w.first = true
-	w.pending = true
+	w.first = true   //这个函数被调用的时候都是一个新的kv要被写入，那么first就应该是true
+	w.pending = true // 标记一下，有待写入的kv，但是它的header还没被写
 	return singleWriter{w, w.seq}, nil
 }
 
@@ -508,6 +541,7 @@ type singleWriter struct {
 	seq int
 }
 
+// p是一个batch里所有kv的数据
 func (x singleWriter) Write(p []byte) (int, error) {
 	w := x.w
 	if w.seq != x.seq {
@@ -519,13 +553,14 @@ func (x singleWriter) Write(p []byte) (int, error) {
 	n0 := len(p)
 	for len(p) > 0 {
 		// Write a block, if it is full.
-		if w.j == blockSize {
+		if w.j == blockSize { //写到block满了
+			//写header，因为数据还没写完，所以传false，也就是block type只会是first或者是middle
 			w.fillHeader(false)
 			w.writeBlock()
 			if w.err != nil {
 				return 0, w.err
 			}
-			w.first = false
+			w.first = false //肯定不是第一个block了
 		}
 		// Copy bytes into the buffer.
 		n := copy(w.buf[w.j:], p)

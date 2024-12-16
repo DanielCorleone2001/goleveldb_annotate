@@ -26,7 +26,7 @@ type version struct {
 	id int64 // unique monotonous increasing version id
 	s  *session
 
-	levels []tFiles
+	levels []tFiles //
 
 	// Level that should be compacted next and its compaction score.
 	// Score < 1 means compaction is not strictly needed. These fields

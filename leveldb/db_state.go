@@ -23,7 +23,7 @@ var (
 type memDB struct {
 	db *DB
 	*memdb.DB
-	ref int32
+	ref int32 //引用计数
 }
 
 func (m *memDB) getref() int32 {
@@ -37,6 +37,10 @@ func (m *memDB) incref() {
 func (m *memDB) decref() {
 	if ref := atomic.AddInt32(&m.ref, -1); ref == 0 {
 		// Only put back memdb with std capacity.
+		// 一个很巧妙的设计，只有memDB的容量等于配置的最大写缓冲区时才会回收
+		// 一旦memDB经过扩容，就不会被丢到memPool中进行重用了，而是等着go的GC帮忙回收
+		//[不重用非标准大小的memdb]比[重用所有大小的memdb]，实现起来更简单且高效
+		// less is more
 		if m.Capacity() == m.db.s.o.GetWriteBuffer() {
 			m.Reset()
 			m.db.mpoolPut(m.DB)
@@ -121,7 +125,7 @@ func (db *DB) mpoolDrain() {
 // newMem only called synchronously by the writer.
 func (db *DB) newMem(n int) (mem *memDB, err error) {
 	fd := storage.FileDesc{Type: storage.TypeJournal, Num: db.s.allocFileNum()}
-	w, err := db.s.stor.Create(fd)
+	w, err := db.s.stor.Create(fd) // 调OS创建文件
 	if err != nil {
 		db.s.reuseFileNum(fd.Num)
 		return
@@ -199,7 +203,7 @@ func (db *DB) getFrozenMem() *memDB {
 // Drop frozen memdb; assume that frozen memdb isn't nil.
 func (db *DB) dropFrozenMem() {
 	db.memMu.Lock()
-	if err := db.s.stor.Remove(db.frozenJournalFd); err != nil {
+	if err := db.s.stor.Remove(db.frozenJournalFd); err != nil { // 这个就是直接删.log文件就行了
 		db.logf("journal@remove removing @%d %q", db.frozenJournalFd.Num, err)
 	} else {
 		db.logf("journal@remove removed @%d", db.frozenJournalFd.Num)

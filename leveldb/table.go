@@ -21,7 +21,8 @@ import (
 )
 
 // tFile holds basic information about a table.
-// 每个 tFile 代表一个已排序的表
+// 每个 tFile 代表一个SSTable的元信息
+// 主要是记录了key的范围以及文件句柄
 // 表中的kv是key有序的
 type tFile struct {
 	fd         storage.FileDesc
@@ -85,7 +86,7 @@ func tableFileFromRecord(r atRecord) *tFile {
 }
 
 // tFiles hold multiple tFile.
-type tFiles []*tFile
+type tFiles []*tFile // 一层Level中的SSTable信息
 
 func (tf tFiles) Len() int      { return len(tf) }
 func (tf tFiles) Swap(i, j int) { tf[i], tf[j] = tf[j], tf[i] }

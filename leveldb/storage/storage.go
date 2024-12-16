@@ -18,9 +18,9 @@ type FileType int
 
 // File types.
 const (
-	TypeManifest FileType = 1 << iota
-	TypeJournal
-	TypeTable
+	TypeManifest FileType = 1 << iota //manifest
+	TypeJournal                       //log
+	TypeTable                         // sstable
 	TypeTemp
 
 	TypeAll = TypeManifest | TypeJournal | TypeTable | TypeTemp

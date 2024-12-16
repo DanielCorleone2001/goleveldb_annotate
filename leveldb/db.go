@@ -31,7 +31,7 @@ import (
 // DB is a LevelDB database.
 type DB struct {
 	// Need 64-bit alignment.
-	seq uint64
+	seq uint64 // seq number主要是用于实现MVCC，每个写操作都会对seq+1，所涉及的kv都会带上此seq。在读取的时候会根据
 
 	// Stats. Need 64-bit alignment.
 	cWriteDelay            int64 // The cumulative duration of write delays
@@ -50,9 +50,9 @@ type DB struct {
 
 	// MemDB.
 	memMu           sync.RWMutex
-	memPool         chan *memdb.DB
+	memPool         chan *memdb.DB //这儿获取到的都会是标准大小的memdb
 	mem, frozenMem  *memDB
-	journal         *journal.Writer
+	journal         *journal.Writer // WAL(Write Ahead Log)
 	journalWriter   storage.Writer
 	journalFd       storage.FileDesc
 	frozenJournalFd storage.FileDesc
@@ -74,9 +74,9 @@ type DB struct {
 
 	// Compaction.
 	compCommitLk     sync.Mutex
-	tcompCmdC        chan cCmd // 触发table压缩，tCompaction函数里会去监听这个channel，然后去执行table压缩
+	tcompCmdC        chan cCmd //控制SSTable之间的合并，也可以叫压缩吧
 	tcompPauseC      chan chan<- struct{}
-	mcompCmdC        chan cCmd
+	mcompCmdC        chan cCmd // immutable memtable被压缩成L0的SSTable
 	compErrC         chan error
 	compPerErrC      chan error
 	compErrSetC      chan error
