@@ -2,6 +2,8 @@ This is an implementation of the [LevelDB key/value database](https://github.com
 
 [![Build Status](https://app.travis-ci.com/syndtr/goleveldb.svg?branch=master)](https://app.travis-ci.com/syndtr/goleveldb)
 
+对LevelDB的实现进行代码注释解释，不涉及任何feature优化。
+
 Installation
 -----------
 
