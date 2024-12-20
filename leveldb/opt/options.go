@@ -556,6 +556,7 @@ func (o *Options) GetComparer() comparer.Comparer {
 	return o.Comparer
 }
 
+// 默认SnappyCompression
 func (o *Options) GetCompression() Compression {
 	if o == nil || o.Compression <= DefaultCompression || o.Compression >= nCompression {
 		return DefaultCompressionType

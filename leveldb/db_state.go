@@ -87,7 +87,7 @@ func (db *DB) mpoolPut(mem *memdb.DB) {
 func (db *DB) mpoolGet(n int) *memDB {
 	var mdb *memdb.DB
 	select {
-	case mdb = <-db.memPool:
+	case mdb = <-db.memPool: // 高并发的场景下，确实有机会命中
 	default:
 	}
 	if mdb == nil || mdb.Capacity() < n {
@@ -138,6 +138,7 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 		return nil, errHasFrozenMem
 	}
 
+	// journal和memtable是一一对应的
 	if db.journal == nil {
 		db.journal = journal.NewWriter(w)
 	} else {

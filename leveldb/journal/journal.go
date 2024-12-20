@@ -434,6 +434,7 @@ func (w *Writer) writeBlock() {
 
 // writePending finishes the current journal and writes the buffer to the
 // underlying writer.
+// 这个方法是确保，writer在block中的数据已经写入到操作系统的缓冲区了
 func (w *Writer) writePending() {
 	if w.err != nil {
 		return

@@ -113,14 +113,14 @@ func (i *dbIter) Seek(key []byte) bool {
 }
 
 func (i *dbIter) Next() bool {
-	if i.Released() {
+	if i.Released() { //迭代器已经关了
 		i.err = ErrIterReleased
 		return false
 	}
 
-	if i.node == 0 {
+	if i.node == 0 { // 当前没有遍历过节点
 		if !i.forward {
-			return i.First()
+			return i.First() //返回第一个节点
 		}
 		return false
 	}

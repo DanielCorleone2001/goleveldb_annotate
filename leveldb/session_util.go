@@ -257,7 +257,7 @@ func (s *session) version() *version {
 	return s.stVersion
 }
 
-// 返回某个Level中已经排序好的表/文件个数
+// 返回某个Level中已经排序好的SSTable个数
 func (s *session) tLen(level int) int {
 	s.vmu.Lock()
 	defer s.vmu.Unlock()

@@ -23,7 +23,7 @@ type Transaction struct {
 	db        *DB
 	lk        sync.RWMutex
 	seq       uint64
-	mem       *memDB
+	mem       *memDB // 每次trx都是会新建memtable
 	tables    tFiles
 	ikScratch []byte
 	rec       sessionRecord
@@ -89,12 +89,16 @@ func (tr *Transaction) NewIterator(slice *util.Range, ro *opt.ReadOptions) itera
 	return tr.db.newIterator(tr.mem, tr.tables, tr.seq, slice, ro)
 }
 
+// memtable转SSTable进行持久化，并存一下SSTable的元信息
 func (tr *Transaction) flush() error {
 	// Flush memdb.
-	if tr.mem.Len() != 0 {
+	if tr.mem.Len() != 0 { //只要不是空事务，memtable都肯定会有数据的
 		tr.stats.startTimer()
 		iter := tr.mem.NewIterator(nil)
-		t, n, err := tr.db.s.tops.createFrom(iter)
+		// 注意：在事务还没提交的时候，但SSTable文件已经是被创建出来了的，
+		// 如果事务回滚的话，SSTable文件就可以被删掉
+		// 如果事务提交，那就把SSTable的信息写入到manifest里
+		t, n, err := tr.db.s.tops.createFrom(iter) // 从迭代器里读出memtable的内容，生成SSTable
 		iter.Release()
 		tr.stats.stopTimer()
 		if err != nil {
@@ -108,16 +112,18 @@ func (tr *Transaction) flush() error {
 			tr.mem.incref()
 		}
 		tr.tables = append(tr.tables, t)
-		tr.rec.addTableFile(0, t)
+		tr.rec.addTableFile(0, t) // 存一下新增的SSTable的信息，此时SSTable文件已经是在磁盘上了的，这儿只是存一下SSTable的信息
 		tr.stats.write += t.size
 		tr.db.logf("transaction@flush created L0@%d N·%d S·%s %q:%q", t.fd.Num, n, shortenb(t.size), t.imin, t.imax)
 	}
 	return nil
 }
 
+// 事务的每次put，都会判断内存是否满了，满了的话就会触发memtable直接生成L0的SSTable
+// 并进行memRotate,此时不是走memtable->immutable memtable的转换流程
 func (tr *Transaction) put(kt keyType, key, value []byte) error {
 	tr.ikScratch = makeInternalKey(tr.ikScratch, key, tr.seq+1, kt)
-	if tr.mem.Free() < len(tr.ikScratch)+len(value) {
+	if tr.mem.Free() < len(tr.ikScratch)+len(value) { // 内存无法容纳这次的写入
 		if err := tr.flush(); err != nil {
 			return err
 		}
@@ -125,7 +131,7 @@ func (tr *Transaction) put(kt keyType, key, value []byte) error {
 	if err := tr.mem.Put(tr.ikScratch, value); err != nil {
 		return err
 	}
-	tr.seq++
+	tr.seq++ // 更新LSN
 	return nil
 }
 
@@ -190,6 +196,7 @@ func (tr *Transaction) setDone() {
 // not committed, it can then either be retried or discarded.
 //
 // Other methods should not be called after transaction has been committed.
+// 事务提交
 func (tr *Transaction) Commit() error {
 	if err := tr.db.ok(); err != nil {
 		return err
@@ -205,13 +212,15 @@ func (tr *Transaction) Commit() error {
 		// transaction.
 		return err
 	}
-	if len(tr.tables) != 0 {
+	if len(tr.tables) != 0 { //本次事务触发了SSTable的新增，其实只要不是空事务，就一定会有新增SSTable的
 		// Committing transaction.
 		tr.rec.setSeqNum(tr.seq)
 		tr.db.compCommitLk.Lock()
 		tr.stats.startTimer()
 		var cerr error
 		for retry := 0; retry < 3; retry++ {
+			// 因为leveldb是只允许单goroutine写入
+			// 因此事务提交的时候，直接用当前的session作为版本数据即可
 			cerr = tr.db.s.commit(&tr.rec, false)
 			if cerr != nil {
 				tr.db.logf("transaction@commit error R·%d %q", retry, cerr)
@@ -265,6 +274,7 @@ func (tr *Transaction) discard() {
 // discarded)
 //
 // Other methods should not be called after transaction has been discarded.
+// 事务回滚的过程
 func (tr *Transaction) Discard() {
 	tr.lk.Lock()
 	if !tr.closed {
@@ -275,6 +285,7 @@ func (tr *Transaction) Discard() {
 }
 
 func (db *DB) waitCompaction() error {
+	// L0层的SSTable个数过多，超过了设定的值，就会阻塞等待SSTable压缩，直至结束
 	if db.s.tLen(0) >= db.s.o.GetWriteL0PauseTrigger() {
 		return db.compTriggerWait(db.tcompCmdC)
 	}
@@ -296,7 +307,7 @@ func (db *DB) waitCompaction() error {
 // Closing the DB will discard open transaction.
 // 1.只会有全局单事务，因为要抢占写锁
 // 2.小的写入不要开事务，假设写入100KB的数据，那么就会直接产生100KB的SSTable文件；
-// 同时L0层会有很多小文件，文件很多的时候就会触发压缩了
+// 同时L0层会有很多小文件，文件很多的时候就会触发LO SSTable压缩了
 // 3.大数据量可以开事务，这样一次性生成大的SSTable，减少compaction的次数
 func (db *DB) OpenTransaction() (*Transaction, error) {
 	if err := db.ok(); err != nil {
@@ -325,6 +336,7 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 	}
 
 	// Wait compaction when certain threshold reached.
+	// 如果L0层的SSTable个数过多，超过了设定的值，就会阻塞等待SSTable压缩，直至结束
 	if err := db.waitCompaction(); err != nil {
 		return nil, err
 	}

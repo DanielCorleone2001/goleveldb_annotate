@@ -48,4 +48,5 @@ func (bytesComparer) Successor(dst, b []byte) []byte {
 
 // DefaultComparer are default implementation of the Comparer interface.
 // It uses the natural ordering, consistent with bytes.Compare.
+// 默认字节序排序
 var DefaultComparer = bytesComparer{}

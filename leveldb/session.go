@@ -210,7 +210,7 @@ func (s *session) recover() (err error) {
 
 // Commit session; need external synchronization.
 func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
-	v := s.version()
+	v := s.version() //获取当前的版本信息
 	defer v.release()
 
 	// spawn new version based on current version

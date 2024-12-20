@@ -145,6 +145,7 @@ func (w *filterWriter) generate() {
 }
 
 // Writer is a table writer.
+// SSTable的Writer
 type Writer struct {
 	writer io.Writer
 	err    error
@@ -253,6 +254,7 @@ func (w *Writer) Append(key, value []byte) error {
 	if w.err != nil {
 		return w.err
 	}
+	// 已经存在key，且当前传入的key比已经存在的key小，那就不满足SSTable有序的需求，抛出error
 	if w.nEntries > 0 && w.cmp.Compare(w.dataBlock.prevKey, key) >= 0 {
 		w.err = fmt.Errorf("leveldb/table: Writer: keys are not in increasing order: %q, %q", w.dataBlock.prevKey, key)
 		return w.err

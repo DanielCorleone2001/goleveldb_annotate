@@ -358,8 +358,8 @@ type tOps struct {
 
 // Creates an empty table and returns table writer.
 func (t *tOps) create(tSize int) (*tWriter, error) {
-	fd := storage.FileDesc{Type: storage.TypeTable, Num: t.s.allocFileNum()}
-	fw, err := t.s.stor.Create(fd)
+	fd := storage.FileDesc{Type: storage.TypeTable, Num: t.s.allocFileNum()} //句柄
+	fw, err := t.s.stor.Create(fd)                                           //创建文件
 	if err != nil {
 		return nil, err
 	}
@@ -372,6 +372,7 @@ func (t *tOps) create(tSize int) (*tWriter, error) {
 }
 
 // Builds table from src iterator.
+// 从迭代器里构建出SSTable
 func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 	w, err := t.create(0)
 	if err != nil {
@@ -380,7 +381,7 @@ func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
 
 	defer func() {
 		if err != nil {
-			if derr := w.drop(); derr != nil {
+			if derr := w.drop(); derr != nil { //写错误了，删掉文件
 				err = fmt.Errorf("error createFrom (%v); error dropping (%v)", err, derr)
 			}
 		}
@@ -593,6 +594,7 @@ func (w *tWriter) finish() (f *tFile, err error) {
 }
 
 // Drops the table.
+// 关掉文件句柄，删除文件
 func (w *tWriter) drop() error {
 	if err := w.close(); err != nil {
 		return err

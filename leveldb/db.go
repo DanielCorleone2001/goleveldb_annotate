@@ -70,7 +70,7 @@ type DB struct {
 	writeAckC    chan error
 	writeDelay   time.Duration
 	writeDelayN  int
-	tr           *Transaction
+	tr           *Transaction // 全局只会有单个trx
 
 	// Compaction.
 	compCommitLk     sync.Mutex

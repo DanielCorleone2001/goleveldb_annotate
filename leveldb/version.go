@@ -279,7 +279,7 @@ func (v *version) newStaging() *versionStaging {
 // Spawn a new version based on this version.
 func (v *version) spawn(r *sessionRecord, trivial bool) *version {
 	staging := v.newStaging()
-	staging.commit(r)
+	staging.commit(r) // apply sessionRecord
 	return staging.finish(trivial)
 }
 
@@ -291,7 +291,7 @@ func (v *version) fillRecord(r *sessionRecord) {
 	}
 }
 
-// 返回某个Level中已经排序好的表/文件个数
+// 返回某个Level中已经排序SSTable文件个数
 func (v *version) tLen(level int) int {
 	if level < len(v.levels) {
 		return len(v.levels[level])
@@ -409,13 +409,14 @@ type tablesScratch struct {
 	deleted map[int64]struct{}
 }
 
+// 版本的拷贝
 type versionStaging struct {
 	base   *version
 	levels []tablesScratch
 }
 
 func (p *versionStaging) getScratch(level int) *tablesScratch {
-	if level >= len(p.levels) {
+	if level >= len(p.levels) { //没有对应的level就扩一下
 		newLevels := make([]tablesScratch, level+1)
 		copy(newLevels, p.levels)
 		p.levels = newLevels
