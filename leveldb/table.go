@@ -52,6 +52,7 @@ func (t *tFile) consumeSeek() int32 {
 }
 
 // Creates new tFile.
+// 记录SSTable的元信息，注意：这儿并没有真的创建文件
 func newTableFile(fd storage.FileDesc, size int64, imin, imax internalKey) *tFile {
 	f := &tFile{
 		fd:   fd,
@@ -73,6 +74,26 @@ func newTableFile(fd storage.FileDesc, size int64, imin, imax internalKey) *tFil
 	// same as the compaction of 40KB of data.  We are a little
 	// conservative and allow approximately one seek for every 16KB
 	// of data before triggering a compaction.
+	// =========
+	// 设计原理：
+	// 1.如果一个文件被频繁查找，说明：
+	// 	a.这个文件可能包含热点数据
+	// b.或者数据分布不够优化
+	// 2.通过压缩可以：
+	// 	a.优化数据的分布
+	// 	b.减少后续查找的成本
+	// 基于性能假设：
+	// 1.一次查找耗时 10ms
+	// 2.读写 1MB 耗时 10ms
+	// 3.压缩 1MB 数据会产生 25MB IO：
+	// 	a.读取本层 1MB
+	// 	b.读取下一层 10-12MB
+	// 	c.写入下一层 10-12MB
+	// 所以 25 次查找的成本 ≈ 压缩的成本
+	// 因此：
+	// 如果文件大小是 1MB，允许 1MB/16KB = 64 次查找
+	// 当查找次数用完，就触发压缩
+	// 这样可以在查找成本和压缩成本之间取得平衡
 	f.seekLeft = int32(size / 16384)
 	if f.seekLeft < 100 {
 		f.seekLeft = 100

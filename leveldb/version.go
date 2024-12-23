@@ -278,8 +278,8 @@ func (v *version) newStaging() *versionStaging {
 
 // Spawn a new version based on this version.
 func (v *version) spawn(r *sessionRecord, trivial bool) *version {
-	staging := v.newStaging()
-	staging.commit(r) // apply sessionRecord
+	staging := v.newStaging() // 创建临时的版本
+	staging.commit(r)         // apply sessionRecord
 	return staging.finish(trivial)
 }
 
@@ -425,6 +425,8 @@ func (p *versionStaging) getScratch(level int) *tablesScratch {
 }
 
 func (p *versionStaging) commit(r *sessionRecord) {
+	// 把已经删除的文件和新增的文件信息进行merge
+	// 最后就会敲定：哪些文件是新增的，哪些是删除了的
 	// Deleted tables.
 	for _, r := range r.deletedTables {
 		scratch := p.getScratch(r.level)
@@ -477,15 +479,21 @@ func (p *versionStaging) finish(trivial bool) *version {
 
 			var nt tFiles
 			// Prealloc list if possible.
+			// 预定义长度，减少内存分配
+			// 长度：当前版本的文件数量+新增的文件数量-删除的文件数量
 			if n := len(baseTabels) + len(scratch.added) - len(scratch.deleted); n > 0 {
 				nt = make(tFiles, 0, n)
 			}
 
 			// Base tables.
+			// compaction是有可能删文件+替换文件的，因此这两个map有可能会match
+			// 事务不会，事务只会增加SSTable，因此这两个map都不会match
 			for _, t := range baseTabels {
+				// 文件是要被删掉的，不从当前版本里取了
 				if _, ok := scratch.deleted[t.fd.Num]; ok {
 					continue
 				}
+				// 要被替换成新文件，也不从当前版本里取
 				if _, ok := scratch.added[t.fd.Num]; ok {
 					continue
 				}
@@ -493,6 +501,8 @@ func (p *versionStaging) finish(trivial bool) *version {
 			}
 
 			// Avoid resort if only files in this level are deleted
+			// 如果本层只有被删除的文件，那么就不需要重新排序
+			// 因为原本的SSTable就是已经排序好的，删除不影响顺序
 			if len(scratch.added) == 0 {
 				nv.levels[level] = nt
 				continue
@@ -518,6 +528,7 @@ func (p *versionStaging) finish(trivial bool) *version {
 					index := nt.searchNumLess(added[len(added)-1].fd.Num)
 					nt = append(nt[:index], append(added, nt[index:]...)...)
 				} else {
+					// 二分查找，找到已经merge的文件需要插入的位置，而不是把本层的文件重新排序
 					added.sortByKey(p.base.s.icmp)
 					_, amax := added.getRange(p.base.s.icmp)
 					index := nt.searchMin(p.base.s.icmp, amax)
