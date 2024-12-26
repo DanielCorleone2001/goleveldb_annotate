@@ -188,7 +188,7 @@ func Open(stor storage.Storage, o *opt.Options) (db *DB, err error) {
 		}
 	}()
 
-	err = s.recover()
+	err = s.recover() // 读manifest
 	if err != nil {
 		if !os.IsNotExist(err) || s.o.GetErrorIfMissing() || s.o.GetReadOnly() {
 			return
@@ -781,14 +781,14 @@ func memGet(mdb *memdb.DB, ikey internalKey, icmp *iComparer) (ok bool, mv []byt
 func (db *DB) get(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.ReadOptions) (value []byte, err error) {
 	ikey := makeInternalKey(nil, key, seq, keyTypeSeek)
 
-	if auxm != nil {
+	if auxm != nil { //已经有memtable，里面肯定是最新的数据，如果能从里面找到，那就直接返回
 		if ok, mv, me := memGet(auxm, ikey, db.s.icmp); ok {
 			return append([]byte(nil), mv...), me
 		}
 	}
 
-	em, fm := db.getMems()
-	for _, m := range [...]*memDB{em, fm} {
+	em, fm := db.getMems()                  //获取memtable和immutable memtable
+	for _, m := range [...]*memDB{em, fm} { // 先从memtable里面找，找不到再从immutable memtable里面找
 		if m == nil {
 			continue
 		}
@@ -798,7 +798,7 @@ func (db *DB) get(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.R
 			return append([]byte(nil), mv...), me
 		}
 	}
-
+	// memtable和immutable memtable里面都没有，那就从SSTable里面找
 	v := db.s.version()
 	value, cSched, err := v.get(auxt, ikey, ro, false)
 	v.release()

@@ -104,7 +104,7 @@ func (s *session) refLoop() {
 			addFileRef(t, 1)
 		}
 		for _, t := range d.deleted {
-			if addFileRef(t, -1) == 0 {
+			if addFileRef(t, -1) == 0 { //文件没有被引用了，删掉文件
 				s.tops.remove(storage.FileDesc{Type: storage.TypeTable, Num: t})
 			}
 		}

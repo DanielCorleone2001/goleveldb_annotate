@@ -33,13 +33,15 @@ func (db *DB) acquireSnapshot() *snapshotElement {
 
 	if e := db.snapsList.Back(); e != nil {
 		se := e.Value.(*snapshotElement)
-		if se.seq == seq {
+		if se.seq == seq { // 可以直接复用
 			se.ref++
 			return se
 		} else if seq < se.seq {
 			panic("leveldb: sequence number is not increasing")
 		}
 	}
+	// 尾节点的LSN比当前DB的LSN要小
+	// 那就创建一个快照，加到链表后返回
 	se := &snapshotElement{seq: seq, ref: 1}
 	se.e = db.snapsList.PushBack(se)
 	return se
