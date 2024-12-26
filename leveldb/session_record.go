@@ -156,15 +156,18 @@ func (p *sessionRecord) putBytes(w io.Writer, x []byte) {
 	_, p.err = w.Write(x)
 }
 
+// 往manifest里写数据
+// 比较器的名字
+// log文件的文件号
 func (p *sessionRecord) encode(w io.Writer) error {
 	p.err = nil
 	if p.has(recComparer) {
 		p.putUvarint(w, recComparer)
-		p.putBytes(w, []byte(p.comparer))
+		p.putBytes(w, []byte(p.comparer)) //比较器
 	}
 	if p.has(recJournalNum) {
 		p.putUvarint(w, recJournalNum)
-		p.putVarint(w, p.journalNum)
+		p.putVarint(w, p.journalNum) //log文件的文件号
 	}
 	if p.has(recNextFileNum) {
 		p.putUvarint(w, recNextFileNum)
